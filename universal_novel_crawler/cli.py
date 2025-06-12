@@ -11,9 +11,12 @@ import sys
 from urllib.parse import urlparse
 
 from .crawler import UniversalNovelCrawler
-from .login_manager import LoginManager, LoginConfig
-from .site_detector import SiteDetector
-from .utils import safe_print, print_banner
+from .modules.login_manager import LoginManager
+from .models import LoginConfig
+from .modules.site_detector import SiteDetector
+from .modules.security_checker import get_security_checker
+from .modules.processor import cleanup_lock_files
+from .utils import safe_print, print_banner, clean_and_validate_url
 
 try:
     from rich.console import Console
@@ -108,6 +111,65 @@ def show_supported_sites():
         print()
     
     print("💡 提示: 除以上网站外，本工具还支持大多数小说网站的通用解析")
+
+def confirm_terms_of_use(auto_confirm: bool = False) -> bool:
+    """确认用户已阅读并同意免责声明和使用条款"""
+    if auto_confirm:
+        return True
+        
+    # 显示重要法律声明
+    safe_print("\n" + "="*80, style="bold red")
+    safe_print("🚨 重要法律声明与风险警告 IMPORTANT LEGAL NOTICE 🚨", style="bold red")
+    safe_print("="*80, style="bold red")
+    
+    safe_print("⚠️  本软件的使用可能涉及以下法律风险:", style="yellow")
+    safe_print("   • 违反《网络安全法》、《数据安全法》、《个人信息保护法》", style="red")
+    safe_print("   • 侵犯网站版权和知识产权", style="red") 
+    safe_print("   • 违反网站用户协议和服务条款", style="red")
+    safe_print("   • 触犯《刑法》相关条款", style="red")
+    
+    safe_print("\n🚫 严禁用于以下用途:", style="yellow")
+    safe_print("   ❌ 爬取政府、军事、公安、国安等敏感机构网站", style="red")
+    safe_print("   ❌ 爬取金融、医疗、教育等涉及隐私的敏感数据", style="red")
+    safe_print("   ❌ 收集个人隐私信息或敏感数据", style="red")
+    safe_print("   ❌ 任何形式的商业用途或牟利行为", style="red")
+    safe_print("   ❌ 侵犯他人版权和知识产权", style="red")
+    
+    safe_print("\n📋 使用本软件即表示您:", style="cyan")
+    safe_print("   ✅ 已阅读完整的免责声明(DISCLAIMER.md)", style="green")
+    safe_print("   ✅ 同意承担所有法律责任和风险", style="green")
+    safe_print("   ✅ 承诺仅用于合法的学习研究目的", style="green")
+    safe_print("   ✅ 遵守相关法律法规和网站服务条款", style="green")
+    
+    safe_print("\n⚖️  所有法律后果由使用者自行承担，与软件作者无关！", style="bold red")
+    safe_print("="*80, style="bold red")
+    
+    # 询问用户确认
+    if RICH_AVAILABLE and console:
+        from rich.prompt import Confirm
+        try:
+            accepted = Confirm.ask(
+                "\n📜 [bold yellow]您是否已阅读并完全理解上述法律风险，并同意继续使用？[/bold yellow]",
+                default=False
+            )
+        except KeyboardInterrupt:
+            safe_print("\n❌ 用户取消操作", style="red")
+            return False
+    else:
+        try:
+            response = input("\n📜 您是否已阅读并完全理解上述法律风险，并同意继续使用？(y/N): ").strip().lower()
+            accepted = response in ['y', 'yes']
+        except KeyboardInterrupt:
+            safe_print("\n❌ 用户取消操作", style="red")
+            return False
+    
+    if not accepted:
+        safe_print("\n❌ 未同意使用条款，程序退出", style="red")
+        safe_print("📖 如需了解详细信息，请查看 DISCLAIMER.md 文件", style="yellow")
+        return False
+    
+    safe_print("\n✅ 用户已确认同意使用条款", style="green")
+    return True
     
 def setup_login_from_args(login_manager: LoginManager, args, site_url: str):
     """根据命令行参数设置登录配置"""
@@ -167,7 +229,6 @@ def run_single_crawl(args) -> bool:
     # 获取URL
     if args.url:
         catalog_url = args.url
-        safe_print(f"📖 目标URL: [blue]{catalog_url}[/blue]", style="cyan")
     else:
         print("\n" + "="*60)
         safe_print("🆕 开始新的爬取任务", style="bold green")
@@ -179,6 +240,18 @@ def run_single_crawl(args) -> bool:
     
     if not catalog_url:
         safe_print("❌ URL不能为空", style="bold red")
+        return False
+    
+    # 清理和验证URL
+    try:
+        original_url = catalog_url
+        catalog_url = clean_and_validate_url(catalog_url)
+        if original_url != catalog_url:
+            safe_print(f"🧹 URL已自动清理: [blue]{catalog_url}[/blue]", style="cyan")
+        else:
+            safe_print(f"📖 目标URL: [blue]{catalog_url}[/blue]", style="cyan")
+    except ValueError as e:
+        safe_print(f"❌ URL格式错误: {e}", style="bold red")
         return False
     
     # 获取线程数
@@ -312,6 +385,10 @@ def main():
     # 显示美化的标题（只在开始时显示一次）
     print_banner(require_confirm=not args.yes)
     
+    # 用户条款确认（法律合规要求）
+    if not confirm_terms_of_use(auto_confirm=args.yes):
+        return
+    
     # 主循环
     while True:
         try:
@@ -333,6 +410,12 @@ def main():
             safe_print(f"❌ 程序执行出错: {e}", style="bold red")
             if not ask_continue():
                 break
+    
+    # 程序结束前清理所有残留的锁文件
+    try:
+        cleanup_lock_files()
+    except Exception as e:
+        safe_print(f"⚠️ 清理锁文件时出错: {e}", style="yellow")
     
     safe_print("👋 感谢使用通用小说爬虫！", style="bold cyan")
 

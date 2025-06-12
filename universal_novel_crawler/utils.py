@@ -1,7 +1,11 @@
 from threading import Lock
-from typing import Dict, List
+from typing import Dict, List, Tuple
 import contextlib
 import os
+import re
+import sys
+import string
+from urllib.parse import urlparse
 
 # 尝试导入rich库用于美化界面
 try:
@@ -14,6 +18,17 @@ try:
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
+
+__all__ = [
+    'file_lock',
+    'safe_print', 
+    'print_banner',
+    'print_status_table',
+    'print_chapter_summary',
+    'get_downloaded_chapters',
+    'parse_chapter_range',
+    'clean_and_validate_url',
+]
 
 # 全局锁字典，为每个文件路径创建单独的锁
 _file_locks = {}
@@ -164,3 +179,104 @@ def print_chapter_summary(chapters: List, range_info: str = ""):
             last_title = chapters[-1].title if hasattr(chapters[-1], 'title') else str(chapters[-1])
             print(f"🔖 首章: {first_title}")
             print(f"🔖 末章: {last_title}") 
+
+def get_downloaded_chapters(output_dir: str) -> List[str]:
+    """获取目录下所有已下载的章节文件名（无扩展名）"""
+    if not os.path.exists(output_dir):
+        return []
+    
+    downloaded = []
+    for filename in os.listdir(output_dir):
+        if filename.endswith('.md'):
+            # 移除.md后缀，得到章节标题
+            title = filename[:-3]
+            downloaded.append(title)
+    
+    return downloaded
+
+
+def parse_chapter_range(range_input: str, total_chapters: int) -> Tuple[int, int]:
+    """
+    解析用户输入的章节范围，如 '1-10', '5:', ':20', '8'。
+    返回一个 (start, end) 的元组（基于1的索引）。
+    """
+    range_input = range_input.strip()
+    if not range_input:
+        return 1, total_chapters
+
+    if range_input.isdigit():
+        val = int(range_input)
+        if 1 <= val <= total_chapters:
+            return val, val
+        else:
+            raise ValueError("单个章节号超出范围。")
+
+    if '-' in range_input or ':' in range_input:
+        sep = '-' if '-' in range_input else ':'
+        parts = range_input.split(sep)
+        start_str, end_str = parts[0], parts[1]
+
+        start = int(start_str) if start_str else 1
+        end = int(end_str) if end_str else total_chapters
+        
+        start = max(1, start)
+        end = min(total_chapters, end)
+
+        if start > end:
+            raise ValueError("开始章节不能大于结束章节。")
+        
+        return start, end
+
+    raise ValueError("无法识别的范围格式。请使用 '1-10', '5:', ':20', 或 '8' 等格式。")
+
+
+def clean_and_validate_url(url: str) -> str:
+    """
+    清理和验证URL，移除异常字符并确保格式正确
+    
+    Args:
+        url: 原始URL字符串
+        
+    Returns:
+        str: 清理后的有效URL
+        
+    Raises:
+        ValueError: 如果URL格式无效
+    """
+    if not url:
+        raise ValueError("URL不能为空")
+    
+    # 移除首尾空白字符
+    url = url.strip()
+    
+    # 移除常见的异常字符（如中文标点符号等）
+    # 这些字符可能在复制粘贴时意外引入
+    abnormal_chars = ['】', '【', '」', '「', '》', '《', '）', '（', '｝', '｛', '］', '［']
+    for char in abnormal_chars:
+        url = url.replace(char, '')
+    
+    # 移除不可见字符和控制字符
+    printable_chars = set(string.printable)
+    url = ''.join(char for char in url if char in printable_chars)
+    
+    # 再次清理首尾空白
+    url = url.strip()
+    
+    # 如果URL不以http://或https://开头，尝试自动添加https://
+    if not url.startswith(('http://', 'https://')):
+        if url.startswith('www.') or '.' in url:
+            url = 'https://' + url
+        else:
+            raise ValueError(f"无效的URL格式: {url}")
+    
+    # 验证URL的基本格式
+    try:
+        parsed = urlparse(url)
+        if not parsed.netloc:
+            raise ValueError(f"URL缺少域名部分: {url}")
+        if not parsed.scheme in ('http', 'https'):
+            raise ValueError(f"URL协议必须是http或https: {url}")
+    except Exception as e:
+        raise ValueError(f"URL格式验证失败: {url}, 错误: {str(e)}")
+    
+    return url
